@@ -2,7 +2,7 @@
 'use strict';
 
 /* ================= Helpers ================= */
-const VERSION = '1.0';
+const VERSION = '1.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const el = html => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -32,6 +32,7 @@ const I = {
   close: svg('<path d="M18 6 6 18M6 6l12 12"/>', 2.2),
   back: svg('<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m17 9-6 6M11 9l6 6"/>', 1.8),
   rotate: svg('<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>'),
+  tilt: svg('<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M3.5 8.5a9 9 0 0 0 0 7M20.5 8.5a9 9 0 0 1 0 7"/>'),
   share: svg('<path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>'),
   mark: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="5.4" fill="#fff"/><ellipse cx="12" cy="12" rx="10.6" ry="3.6" stroke="#fff" stroke-width="1.6" transform="rotate(-22 12 12)" opacity=".85"/></svg>'
 };
@@ -312,7 +313,7 @@ function renderHome(v, anim) {
     </div>
     <div class="card-shadow"></div>
   </div>
-  <p class="card-hint">Tap the card to flip it. Tilt your phone to move it.</p>
+  ${cardHint()}
   ${budgetHtml}
   ${isIOS && !standalone && !state.hideInstall ? `
   <div class="install rise" style="--i:1" id="install">
@@ -327,7 +328,7 @@ function renderHome(v, anim) {
   </section>
   ${byCat.length ? `
   <section class="block rise" style="--i:3">
-    <div class="block-head"><h2>Where it went</h2><button class="link" data-go="insights">Details</button></div>
+    <div class="block-head"><h2>Where it went</h2><button class="link" data-act="galaxy">🪐 3D galaxy</button></div>
     <div class="hscroll">${byCat.slice(0, 8).map((c, i) => { const k = cat(c.id); return `
       <button class="cchip" data-fcat="${c.id}" style="--c:${k.color};--i:${i}">
         <span class="e">${k.emoji}</span><span class="n">${esc(k.name)}</span><span class="a">${money(c.amount)}</span>
@@ -360,7 +361,7 @@ function selectDay(d) {
 }
 
 /* ---------- 3D card physics ---------- */
-const Card = { el: null, rx: 0, ry: 0, vx: 0, vy: 0, tx: 0, ty: 0, flip: 0, vf: 0, tf: 0, touching: false, g: null, raf: 0, got: false };
+const Card = { el: null, rx: 0, ry: 0, vx: 0, vy: 0, tx: 0, ty: 0, flip: 0, vf: 0, tf: 0, touching: false, raf: 0 };
 function attachCard(card) {
   if (!card) return;
   Card.el = card; Card.flip = Card.tf = 0; Card.vf = 0;
@@ -386,7 +387,8 @@ function cardStep() {
   Card.raf = 0;
   const c = Card.el;
   if (!c || !c.isConnected) return;
-  const gx = !Card.touching && Card.g ? Card.g.x : 0, gy = !Card.touching && Card.g ? Card.g.y : 0;
+  const tilt = state.tilt && Motion.got && !Card.touching;
+  const gx = tilt ? Motion.y * 16 : 0, gy = tilt ? -Motion.x * 20 : 0;
   const k = 0.11, d = 0.76;
   Card.vx = (Card.vx + (Card.tx + gx - Card.rx) * k) * d; Card.rx += Card.vx;
   Card.vy = (Card.vy + (Card.ty + gy - Card.ry) * k) * d; Card.ry += Card.vy;
@@ -402,16 +404,35 @@ function cardStep() {
     Math.abs(Card.tx + gx - Card.rx) + Math.abs(Card.ty + gy - Card.ry) + Math.abs(Card.tf - Card.flip) > 0.05;
   if (busy) kick();
 }
+/* ---------- Gyroscope (shared by the card, charts, background and galaxy) ---------- */
+const Motion = {
+  on: false, got: false, base: null, tx: 0, ty: 0, x: 0, y: 0, subs: new Set(), raf: 0,
+  needsPermission() { const D = window.DeviceOrientationEvent; return !!D && typeof D.requestPermission === 'function' && !this.got; },
+  start() { if (this.on) return; this.on = true; window.addEventListener('deviceorientation', onOrient); },
+  stop() { this.on = false; window.removeEventListener('deviceorientation', onOrient); this.base = null; this.tx = this.ty = 0; this.loop(); },
+  sub(fn) { this.subs.add(fn); return () => this.subs.delete(fn); },
+  loop() { if (!this.raf) this.raf = requestAnimationFrame(motionTick); }
+};
 function onOrient(e) {
   if (e.beta == null || e.gamma == null) return;
-  Card.got = true;
-  const b = clamp(e.beta - 45, -30, 30), g = clamp(e.gamma, -30, 30);
-  Card.g = { x: -b * 0.4, y: g * 0.55 };
-  kick();
+  const first = !Motion.got;
+  Motion.got = true;
+  const b = e.beta, g = e.gamma;
+  // "Neutral" is however you normally hold the phone; it slowly re-centres when you change position.
+  if (!Motion.base) Motion.base = { b, g };
+  const db = b - Motion.base.b, dg = g - Motion.base.g;
+  if (Math.abs(dg) < 60) { Motion.base.g += dg * 0.002; Motion.tx = clamp(dg / 26, -1, 1); }
+  if (Math.abs(db) < 70) { Motion.base.b += db * 0.002; Motion.ty = clamp(db / 26, -1, 1); }
+  if (first) onMotionReady();
+  Motion.loop();
 }
-let gyroOn = false, askedMotion = false;
-function startGyro() { if (gyroOn) return; gyroOn = true; window.addEventListener('deviceorientation', onOrient); }
-function stopGyro() { gyroOn = false; window.removeEventListener('deviceorientation', onOrient); Card.g = null; kick(); }
+function motionTick() {
+  Motion.raf = 0;
+  Motion.x += (Motion.tx - Motion.x) * 0.14;
+  Motion.y += (Motion.ty - Motion.y) * 0.14;
+  Motion.subs.forEach(fn => { if (fn(Motion.x, Motion.y) === false) Motion.subs.delete(fn); });
+  if (Math.abs(Motion.tx - Motion.x) + Math.abs(Motion.ty - Motion.y) > 0.0008) Motion.loop();
+}
 async function requestMotion() {
   const D = window.DeviceOrientationEvent;
   if (!D) return false;
@@ -420,10 +441,27 @@ async function requestMotion() {
   }
   return true;
 }
+async function enableMotion() {
+  const ok = await requestMotion();
+  if (!ok) { toast('Motion access was not allowed', { icon: '📵' }); return false; }
+  state.tilt = true; persist();
+  Motion.start();
+  return true;
+}
+let askedMotion = false;
 async function askMotion() {
-  if (!state.tilt || Card.got || askedMotion) return;
+  if (!state.tilt || Motion.got || askedMotion || !Motion.needsPermission()) return;
   askedMotion = true;
-  if (await requestMotion()) startGyro();
+  if (await requestMotion()) Motion.start();
+}
+function onMotionReady() {
+  const h = $('#v-home .card-hint');
+  if (h) h.outerHTML = cardHint();
+  $$('.gx-motion').forEach(c => c.remove());
+}
+function cardHint() {
+  if (state.tilt && Motion.needsPermission()) return `<p class="card-hint"><button class="motion-chip" data-act="motion">${I.tilt}Turn on tilt for 3D motion</button></p>`;
+  return '<p class="card-hint">Tap the card to flip it. Tilt your phone to move it.</p>';
 }
 
 /* ---------- Activity ---------- */
@@ -585,7 +623,7 @@ function renderInsights(v, anim) {
     </div>
   </section>
   <section class="block rise" style="--i:2">
-    <div class="block-head"><h2>Categories</h2>${byCat.length ? `<span class="aside">${byCat.length} with spending</span>` : ''}</div>
+    <div class="block-head"><h2>Categories</h2>${byCat.length ? '<button class="link" data-act="galaxy">🪐 3D galaxy</button>' : ''}</div>
     <div class="panel">${byCat.length ? donutHtml(segs, exp, anim) : emptyState('No spending yet', 'Your categories show up here once you add an expense.')}</div>
   </section>
   <section class="block rise" style="--i:3">
@@ -610,8 +648,9 @@ function bars3D(data) {
 }
 function setupBars(v, six, anim) {
   const scene = $('#b3', v), stage = $('.b3-stage', scene), info = $('#b3-info', v);
-  const st = { rx: -18, ry: -26, vry: 0, drag: null };
-  const apply = () => { stage.style.setProperty('--rx', st.rx.toFixed(2) + 'deg'); stage.style.setProperty('--ry', st.ry.toFixed(2) + 'deg'); };
+  const st = { rx: -18, ry: -26, vry: 0, drag: null, gx: 0, gy: 0 };
+  const apply = () => { stage.style.setProperty('--rx', clamp(st.rx + st.gy * 16, -66, -2).toFixed(2) + 'deg'); stage.style.setProperty('--ry', (st.ry + st.gx * 36).toFixed(2) + 'deg'); };
+  Motion.sub((x, y) => { if (!stage.isConnected) return false; if (!state.tilt) return; st.gx = x; st.gy = y; apply(); });
   const setInfo = i => { const d = six[i]; info.innerHTML = `<b>${MONTHS[d.d.getMonth()]} ${d.d.getFullYear()}</b>: ${esc(money(d.value))} spent`; };
   setInfo(ui.barSel);
   if (anim && !reduced) {
@@ -682,9 +721,10 @@ function donutHtml(segs, total, anim) {
 }
 function setupDonut(v, segs, total, C) {
   const scene = $('#d3', v), stage = $('.d3-stage', scene);
-  const st = { spin: 0, vel: 0, target: null, drag: null, raf: 0 };
+  const st = { spin: 0, vel: 0, target: null, drag: null, raf: 0, gx: 0, gy: 0 };
   if (stage.classList.contains('intro')) stage.addEventListener('animationend', () => stage.classList.remove('intro'), { once: true });
-  const apply = () => stage.style.setProperty('--spin', st.spin.toFixed(2) + 'deg');
+  const apply = () => { stage.style.setProperty('--spin', (st.spin + st.gx * 34).toFixed(2) + 'deg'); stage.style.setProperty('--tilt', clamp(52 - st.gy * 18, 28, 76).toFixed(1) + 'deg'); };
+  Motion.sub((x, y) => { if (!stage.isConnected) return false; if (!state.tilt) return; st.gx = x; st.gy = y; apply(); });
   const loop = () => {
     st.raf = 0;
     if (st.drag || !stage.isConnected) return;
@@ -1061,7 +1101,7 @@ function openSettings() {
     <p class="group-title">Feel</p>
     <div class="group">
       <div class="row static"><span class="lbl">Haptic feedback<small>Light taps when you press buttons</small></span><button class="toggle" data-tg="haptics" aria-pressed="${state.haptics}" aria-label="Haptic feedback"></button></div>
-      <div class="row static"><span class="lbl">Motion tilt<small>The card moves as you tilt your phone</small></span><button class="toggle" data-tg="tilt" aria-pressed="${state.tilt}" aria-label="Motion tilt"></button></div>
+      <div class="row static"><span class="lbl">Motion tilt<small>The card, charts and galaxy move as you tilt your phone</small></span><button class="toggle" data-tg="tilt" aria-pressed="${state.tilt}" aria-label="Motion tilt"></button></div>
     </div>
     <p class="group-title">Your data</p>
     <div class="group">
@@ -1085,9 +1125,9 @@ function openSettings() {
     if (k === 'tilt' && on) {
       const ok = await requestMotion();
       if (!ok) { toast('Motion access is off for this app', { icon: '📵' }); return; }
-      startGyro();
+      Motion.start();
     }
-    if (k === 'tilt' && !on) stopGyro();
+    if (k === 'tilt' && !on) Motion.stop();
     state[k] = on; persist();
     t.setAttribute('aria-pressed', on);
     haptic();
@@ -1141,6 +1181,260 @@ async function shareFile(name, text, type) {
   const url = URL.createObjectURL(file), a = document.createElement('a');
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/* ================= 3D spending galaxy ================= */
+const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+const lighten = (hex, t) => { const n = parseInt(hex.slice(1), 16), f = c => Math.round(c + (255 - c) * t); return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`; };
+function openGalaxy() {
+  if ($('.galaxy')) return;
+  const m = ui.month, mt = monthTx(m);
+  const cats = groupCats(mt, 'expense').slice(0, 10);
+  const total = sum(mt, 'expense');
+  const ov = el(`<div class="galaxy" role="dialog" aria-modal="true" aria-label="Spending galaxy">
+    <canvas class="gx-canvas"></canvas>
+    <div class="gx-top">
+      <div><h2>${MONTHS[m.getMonth()]} galaxy</h2><p>${cats.length ? `${esc(money(total))} spent across ${cats.length} ${cats.length === 1 ? 'category' : 'categories'}` : 'No spending in this month yet'}</p></div>
+      <button class="icon-btn gx-close" aria-label="Close galaxy">${I.close}</button>
+    </div>
+    ${state.tilt && Motion.needsPermission() ? `<button class="motion-chip gx-motion">${I.tilt}Turn on tilt to look around</button>` : ''}
+    <div class="gx-hint">${cats.length ? 'Tilt your phone or drag to look around. Pinch to zoom. Tap a planet.' : 'Add an expense to put a planet in orbit.'}</div>
+    <div class="gx-info" aria-live="polite"></div>
+  </div>`);
+  document.body.append(ov);
+  document.body.classList.add('galaxy-open');
+  requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
+  haptic();
+
+  const cv = $('.gx-canvas', ov), ctx = cv.getContext('2d'), info = $('.gx-info', ov), hint = $('.gx-hint', ov);
+  let W = 0, H = 0;
+  const resize = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = ov.clientWidth; H = ov.clientHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  resize();
+  window.addEventListener('resize', resize);
+
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const max = cats.length ? cats[0].amount : 1;
+  const planets = cats.map((c, i) => {
+    const orbit = 80 + i * 30;
+    return { c, k: cat(c.id), orbit, size: 10 + 18 * Math.sqrt(c.amount / max), ang: rnd() * Math.PI * 2,
+      speed: 0.55 * Math.pow(80 / orbit, 1.5), inc: (rnd() - 0.5) * 0.26, sx: -999, sy: -999, sr: 0, sz: 0 };
+  });
+  const span = (planets.length ? planets[planets.length - 1].orbit : 80) + 40;
+  const stars = Array.from({ length: 260 }, () => {
+    const u = rnd() * 2 - 1, t = rnd() * Math.PI * 2, s = Math.sqrt(1 - u * u);
+    return { x: s * Math.cos(t), y: u, z: s * Math.sin(t), r: 0.4 + rnd() * 1.3, tw: rnd() * 6.28 };
+  });
+  const cam = { yaw: -0.5, pitch: 0, vyaw: 0, zoom: 1 };
+  let intro = 0, sel = null, last = performance.now(), raf = 0, drag = null, pinch = null, ei = 0;
+  const FOV = span * 2.6;
+  const ptrs = new Map();
+
+  const drawSun = (p, now) => {
+    const r = 26 * p.f * cam.zoom * (1 + 0.04 * Math.sin(now / 420));
+    const g1 = ctx.createRadialGradient(p.x, p.y, r * 0.5, p.x, p.y, r * 3.6);
+    g1.addColorStop(0, 'rgba(157,140,255,.55)'); g1.addColorStop(1, 'rgba(157,140,255,0)');
+    ctx.globalAlpha = 1; ctx.fillStyle = g1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.6, 0, 6.2832); ctx.fill();
+    const g = ctx.createRadialGradient(p.x - r * 0.3, p.y - r * 0.35, r * 0.1, p.x, p.y, r);
+    g.addColorStop(0, '#FFFFFF'); g.addColorStop(0.35, '#C9BFFF'); g.addColorStop(0.8, '#6A52F2'); g.addColorStop(1, '#3B2AA8');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `600 ${Math.round(r * 0.8)}px Unbounded, -apple-system, system-ui, sans-serif`;
+    ctx.fillText(curSymbol(), p.x, p.y + r * 0.04);
+  };
+  const drawPlanet = (it, sunP) => {
+    const { p, pl } = it, k = pl.k;
+    const r = pl.size * p.f * cam.zoom * (0.4 + 0.6 * ei);
+    pl.sx = p.x; pl.sy = p.y; pl.sr = r; pl.sz = p.z;
+    const dx = sunP.x - p.x, dy = sunP.y - p.y, d = Math.hypot(dx, dy) || 1;
+    const hx = p.x + dx / d * r * 0.5, hy = p.y + dy / d * r * 0.5;
+    ctx.globalAlpha = ei * clamp(0.6 + 0.4 * (1 - p.z / span), 0.5, 1);
+    if (sel === pl) {
+      const gl = ctx.createRadialGradient(p.x, p.y, r * 0.8, p.x, p.y, r * 2.6);
+      gl.addColorStop(0, hexA(k.color, 0.5)); gl.addColorStop(1, hexA(k.color, 0));
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.6, 0, 6.2832); ctx.fill();
+    }
+    const g = ctx.createRadialGradient(hx, hy, r * 0.1, p.x, p.y, r);
+    g.addColorStop(0, lighten(k.color, 0.6)); g.addColorStop(0.55, k.color); g.addColorStop(1, darken(k.color, 0.28));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.2832); ctx.fill();
+    if (r > 10) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `${Math.round(r * 0.95)}px -apple-system, "Apple Color Emoji", "Segoe UI Emoji", system-ui`;
+      ctx.fillText(k.emoji, p.x, p.y + r * 0.06);
+    }
+    if (sel === pl) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 6.2832); ctx.stroke(); }
+  };
+  const drawLabel = pl => {
+    const txt = `${pl.k.name}  ${money(pl.c.amount)}`;
+    ctx.font = '600 13px -apple-system, system-ui, sans-serif';
+    const w = ctx.measureText(txt).width + 22, h = 28;
+    const x = clamp(pl.sx - w / 2, 8, W - w - 8), y = pl.sy - pl.sr - h - 12;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(9,10,18,.88)'; ctx.strokeStyle = pl.k.color; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, 14); else ctx.rect(x, y, w, h);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(txt, x + w / 2, y + h / 2 + 0.5);
+  };
+
+  function frame(now) {
+    raf = requestAnimationFrame(frame);
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    intro = Math.min(1, intro + dt / 1.8);
+    ei = 1 - Math.pow(1 - intro, 3);
+    const tilt = state.tilt && Motion.got;
+    const gx = tilt ? Motion.x : 0, gy = tilt ? Motion.y : 0;
+    if (!drag && !pinch) { cam.yaw += cam.vyaw; cam.vyaw *= 0.94; if (!reduced) cam.yaw += dt * 0.07; }
+    const yaw = cam.yaw + gx * 1.15;
+    const pitch = clamp(0.6 + cam.pitch - gy * 0.55 + (1 - ei) * 0.75, 0.14, 1.5);
+    const scale = Math.min(W, H * 0.78) / (2 * span) * cam.zoom * (0.85 + 0.15 * ei);
+    const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const CX = W / 2, CY = H * 0.48;
+    const P = (x, y, z) => {
+      const x1 = x * cyw - z * syw, z1 = x * syw + z * cyw;
+      const y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+      const f = FOV / (FOV + z2);
+      return { x: CX + x1 * f * scale, y: CY + y1 * f * scale, z: z2, f };
+    };
+
+    ctx.clearRect(0, 0, W, H);
+    // Stars sit on a far-away sphere, so they slide past as you tilt.
+    ctx.fillStyle = '#fff';
+    const R = Math.max(W, H) * 0.85;
+    for (const s of stars) {
+      const x1 = s.x * cyw - s.z * syw, z1 = s.x * syw + s.z * cyw;
+      const y1 = s.y * cp - z1 * sp, z2 = s.y * sp + z1 * cp;
+      if (z2 < -0.15) continue;
+      ctx.globalAlpha = (0.3 + 0.35 * Math.sin(now / 650 + s.tw)) * Math.min(1, (z2 + 0.15) * 3);
+      ctx.beginPath(); ctx.arc(CX + x1 * R, CY + y1 * R, s.r, 0, 6.2832); ctx.fill();
+    }
+
+    const items = [];
+    const sunP = P(0, 0, 0);
+    items.push({ t: 's', z: sunP.z, p: sunP });
+    for (const pl of planets) {
+      if (!reduced) pl.ang += dt * pl.speed;
+      const Rr = pl.orbit * (0.25 + 0.75 * ei);
+      const ci = Math.cos(pl.inc), si = Math.sin(pl.inc);
+      const pos = a => { const x0 = Rr * Math.cos(a), z0 = Rr * Math.sin(a); return P(x0, -z0 * si, z0 * ci); };
+      const isSel = sel === pl;
+      let prev = pos(0);
+      for (let k = 1; k <= 72; k++) {
+        const cur = pos(k / 72 * Math.PI * 2);
+        items.push({ t: 'r', z: (prev.z + cur.z) / 2, a: prev, b: cur, pl, sel: isSel });
+        prev = cur;
+      }
+      const pp = pos(pl.ang);
+      items.push({ t: 'p', z: pp.z, p: pp, pl });
+    }
+    items.sort((a, b) => b.z - a.z);
+    for (const it of items) {
+      if (it.t === 'r') {
+        ctx.globalAlpha = ei;
+        ctx.strokeStyle = it.sel ? it.pl.k.color : it.z < 0 ? 'rgba(180,186,255,.32)' : 'rgba(180,186,255,.13)';
+        ctx.lineWidth = it.sel ? 2 : 1;
+        ctx.beginPath(); ctx.moveTo(it.a.x, it.a.y); ctx.lineTo(it.b.x, it.b.y); ctx.stroke();
+      } else if (it.t === 's') drawSun(it.p, now);
+      else drawPlanet(it, sunP);
+    }
+    if (sel) drawLabel(sel);
+    ctx.globalAlpha = 1;
+  }
+
+  const select = pl => {
+    sel = pl === sel ? null : pl;
+    if (sel) {
+      const c = sel.c, k = sel.k, pct = c.amount / total * 100;
+      info.innerHTML = `<span class="e" style="--c:${k.color}">${k.emoji}</span>
+        <div class="mid"><b>${esc(k.name)}: ${esc(money(c.amount))}</b>
+        <small>${pct < 1 ? 'Under 1' : Math.round(pct)}% of your spending in ${MONTHS[m.getMonth()]}</small>
+        <small>${c.count} ${c.count === 1 ? 'expense' : 'expenses'}, about ${esc(money(c.amount / c.count, { dec: 0 }))} each</small></div>
+        <button class="btn primary" data-gx-see>See all</button>`;
+      info.classList.add('show');
+      hint.style.opacity = '0';
+    } else info.classList.remove('show');
+    haptic();
+  };
+  info.addEventListener('click', e => {
+    if (!e.target.closest('[data-gx-see]') || !sel) return;
+    const id = sel.c.id;
+    close();
+    ui.fcat = id; ui.filter = 'all'; ui.q = '';
+    setTimeout(() => go('activity'), 250);
+  });
+
+  cv.addEventListener('pointerdown', e => {
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    hint.style.opacity = '0';
+    cam.vyaw = 0;
+    if (ptrs.size === 1) drag = { x: e.clientX, y: e.clientY, yaw: cam.yaw, pitch: cam.pitch, lx: e.clientX, lt: performance.now(), moved: false };
+    else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, zoom: cam.zoom };
+      if (drag) drag.moved = true;
+    }
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && ptrs.size >= 2) {
+      const [a, b] = [...ptrs.values()];
+      cam.zoom = clamp(pinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, 0.6, 2.4);
+      return;
+    }
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+    cam.yaw = drag.yaw + dx * 0.007;
+    cam.pitch = clamp(drag.pitch - dy * 0.005, -0.45, 0.9);
+    const now = performance.now();
+    cam.vyaw = (e.clientX - drag.lx) * 0.007 / Math.max(1, now - drag.lt) * 16;
+    drag.lx = e.clientX; drag.lt = now;
+  });
+  const up = e => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    if (ptrs.size < 2) pinch = null;
+    if (ptrs.size === 1) {
+      const [p] = [...ptrs.values()];
+      drag = { x: p.x, y: p.y, yaw: cam.yaw, pitch: cam.pitch, lx: p.x, lt: performance.now(), moved: true };
+      return;
+    }
+    const d = drag; drag = null;
+    if (!d || d.moved || e.type !== 'pointerup') return;
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    let best = null, bz = Infinity;
+    for (const pl of planets) {
+      if (Math.hypot(pl.sx - x, pl.sy - y) < pl.sr + 16 && pl.sz < bz) { best = pl; bz = pl.sz; }
+    }
+    if (best) select(best); else if (sel) select(sel);
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+
+  let closed = false;
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  function close() {
+    if (closed) return; closed = true;
+    ov.classList.remove('open'); ov.classList.add('closing');
+    document.body.classList.remove('galaxy-open');
+    window.removeEventListener('resize', resize);
+    document.removeEventListener('keydown', onKey);
+    setTimeout(() => { cancelAnimationFrame(raf); ov.remove(); }, 380);
+  }
+  $('.gx-close', ov).addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  const chip = $('.gx-motion', ov);
+  if (chip) chip.addEventListener('click', async () => { if (await enableMotion()) chip.remove(); });
+  raf = requestAnimationFrame(frame);
 }
 
 /* ================= Toasts & dialogs ================= */
@@ -1239,7 +1533,7 @@ function shiftMonth(dir) {
 
 document.addEventListener('click', e => {
   const t = e.target;
-  if (!t.closest || t.closest('.sheet-wrap') || t.closest('.dlg-wrap')) return;
+  if (!t.closest || t.closest('.sheet-wrap') || t.closest('.dlg-wrap') || t.closest('.galaxy')) return;
   const tab = t.closest('[data-tab]'); if (tab) return go(tab.dataset.tab);
   if (t.closest('#fab')) { haptic(); return openAdd(); }
   const m = t.closest('[data-m]'); if (m) return shiftMonth(+m.dataset.m);
@@ -1254,6 +1548,8 @@ document.addEventListener('click', e => {
     if (k === 'add') return openAdd();
     if (k === 'settings') return openSettings();
     if (k === 'edit-budget') return openBudgetEditor();
+    if (k === 'galaxy') return openGalaxy();
+    if (k === 'motion') return enableMotion();
     if (k === 'hide-install') {
       state.hideInstall = true; persist();
       const box = $('#install');
@@ -1313,8 +1609,8 @@ function loadDemo() {
 function showOnboarding() {
   const ob = el(`<div id="onboard">
     <div class="ob-orbit" aria-hidden="true">
-      <div class="ob-ring r2"><i></i><b></b></div><div class="ob-ring r1"><i></i><b></b></div><div class="ob-ring r3"><i></i><b></b></div>
-      <div class="ob-core" id="ob-sym">${esc(curSymbol())}</div>
+      <div class="ob-tilt"><div class="ob-ring r2"><i></i><b></b></div><div class="ob-ring r1"><i></i><b></b></div><div class="ob-ring r3"><i></i><b></b></div>
+      <div class="ob-core" id="ob-sym">${esc(curSymbol())}</div></div>
     </div>
     <h1 class="ob-title">Orbit</h1>
     <p class="ob-sub">Log what you spend in a few taps and see where your money goes. Everything stays on this phone.</p>
@@ -1328,6 +1624,8 @@ function showOnboarding() {
   </div>`);
   document.body.append(ob);
   const nameIn = $('#ob-name', ob);
+  const obTilt = $('.ob-tilt', ob);
+  Motion.sub((x, y) => { if (!obTilt.isConnected) return false; obTilt.style.setProperty('--ox', (y * 24).toFixed(2) + 'deg'); obTilt.style.setProperty('--oy', (-x * 30).toFixed(2) + 'deg'); });
   nameIn.addEventListener('keydown', e => { if (e.key === 'Enter') nameIn.blur(); });
   $('#ob-cursel', ob).addEventListener('change', e => {
     state.currency = e.target.value;
@@ -1363,7 +1661,9 @@ function registerSW() {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 function boot() {
-  if (state.tilt) startGyro();
+  if (state.tilt) Motion.start();
+  const bg = $('#bg');
+  Motion.sub((x, y) => { bg.style.setProperty('--gx', x.toFixed(3)); bg.style.setProperty('--gy', y.toFixed(3)); kick(); });
   if (!state.onboarded) { render('home', false); showOnboarding(); }
   else render('home', true);
   updateTabs();

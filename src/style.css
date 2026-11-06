@@ -549,3 +549,42 @@ body.sheet-open #tabbar{transform:translateY(160%)}
   .sheet{left:calc(50% - 260px);right:calc(50% - 260px)}
   .hscroll,.filters,.cats{margin-left:0;margin-right:0}
 }
+
+/* ============ Gyroscope parallax ============ */
+#bg .o1{translate:calc(var(--gx,0) * -44px) calc(var(--gy,0) * -44px)}
+#bg .o2{translate:calc(var(--gx,0) * -70px) calc(var(--gy,0) * -70px)}
+#bg .o3{translate:calc(var(--gx,0) * -56px) calc(var(--gy,0) * -56px)}
+#bg .stars{translate:calc(var(--gx,0) * -22px) calc(var(--gy,0) * -22px)}
+.ob-tilt{position:absolute;inset:0;transform-style:preserve-3d;transform:rotateX(var(--ox,0deg)) rotateY(var(--oy,0deg))}
+.motion-chip{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 15px;border-radius:999px;font-size:13.5px;font-weight:650;color:var(--star);
+  background:rgba(157,140,255,.16);border:1px solid rgba(157,140,255,.38);animation:chipGlow 2.4s ease-in-out infinite;transition:transform .2s var(--spring)}
+.motion-chip:active{transform:scale(.94)}
+.motion-chip svg{width:17px;height:17px;color:var(--plasma);animation:wiggle 2.4s ease-in-out infinite}
+@keyframes chipGlow{50%{box-shadow:0 0 20px rgba(157,140,255,.45)}}
+@keyframes wiggle{0%,60%,100%{transform:rotate(0)}70%{transform:rotate(-14deg)}85%{transform:rotate(14deg)}}
+
+/* ============ Galaxy ============ */
+.galaxy{position:fixed;inset:0;z-index:70;overflow:hidden;touch-action:none;
+  background:radial-gradient(120% 80% at 50% 45%,#17133D 0%,#08081A 55%,#030308 100%);
+  opacity:0;transform:scale(1.12);transition:opacity .45s ease,transform .8s var(--out)}
+.galaxy.open{opacity:1;transform:none}
+.galaxy.closing{opacity:0;transform:scale(.92);transition:opacity .3s ease,transform .35s ease-in}
+.gx-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.gx-top{position:absolute;left:0;right:0;top:0;padding:calc(var(--sat) + 14px) 20px 0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;pointer-events:none}
+.gx-top h2{margin:0;font-family:var(--display);font-weight:600;font-size:23px;letter-spacing:-.02em}
+.gx-top p{margin:5px 0 0;color:var(--dust);font-size:14px}
+.gx-top .icon-btn{pointer-events:auto;background:rgba(26,29,58,.8)}
+.gx-motion{position:absolute;left:50%;top:calc(var(--sat) + 92px);transform:translateX(-50%);white-space:nowrap}
+.gx-motion:active{transform:translateX(-50%) scale(.94)}
+.gx-hint{position:absolute;left:20px;right:20px;bottom:calc(var(--sab) + 26px);text-align:center;color:var(--dust);font-size:13px;line-height:1.45;
+  pointer-events:none;transition:opacity .5s}
+.gx-info{position:absolute;left:14px;right:14px;bottom:calc(var(--sab) + 14px);display:flex;align-items:center;gap:12px;padding:14px;border-radius:24px;
+  background:rgba(18,20,42,.84);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.1);
+  box-shadow:0 20px 50px rgba(0,0,0,.5);transform:translateY(calc(100% + 40px));transition:transform .55s var(--spring)}
+.gx-info.show{transform:none}
+.gx-info .e{width:50px;height:50px;flex:none;border-radius:16px;display:grid;place-items:center;font-size:24px;background:color-mix(in srgb,var(--c) 22%,#14162E)}
+.gx-info .mid{flex:1;min-width:0}
+.gx-info b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gx-info small{display:block;font-size:12.5px;color:var(--dust);margin-top:3px}
+.gx-info .btn{height:42px;font-size:14px;padding:0 14px;border-radius:14px;flex:none}
+body.galaxy-open #tabbar{transform:translateY(160%)}
